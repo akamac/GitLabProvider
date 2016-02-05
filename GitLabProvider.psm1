@@ -5,8 +5,8 @@
 +public void RemovePackageSource(string name, Func<string, IEnumerable<object>, object> c)
 +public bool GetPackageSources(Func<string, IEnumerable<object>, object> c)
 +public bool InstallPackageByFastpath(string fastPath, Func<string, IEnumerable<object>, object> c)
-public bool GetInstalledPackages(string name, Func<string, IEnumerable<object>, object> c)
-public bool UninstallPackage(string fastPath, Func<string, IEnumerable<object>, object> c)
++public bool GetInstalledPackages(string name, Func<string, IEnumerable<object>, object> c)
++public bool UninstallPackage(string fastPath, Func<string, IEnumerable<object>, object> c)
 -public bool InstallPackageByFile(string filePath, Func<string, IEnumerable<object>, object> c)
 -public bool FindPackageByFile(string filePath, Func<string, IEnumerable<object>, object> c)
 -public void GetMetadataDefinitions(Func<string, IEnumerable<object>, object> c)
@@ -46,29 +46,122 @@ Get-InstalledModule
 #. $PSScriptRoot\PackageProviderFunctions.psm1
 
 $ProviderName = 'GitLab'
-$PrivateToken = Get-Content "$PSScriptRoot\PrivateToken" | ConvertFrom-SecureString # SourceName:UserName:Token
-$PackageSourcesPath = "$PSScriptRoot\PackageSources.xml"
+#$PrivateToken = Get-Content "$PSScriptRoot\PrivateToken" | ConvertFrom-SecureString # SourceName:UserName:Token
+$PackageSourcesPath = "$PSScriptRoot\PackageSources.json"
 $RegisteredPackageSources = @()
 Load-RegisteredPackageSources
 
-$InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.xml"
-$InstalledPackages = if (Test-Path $InstalledPackagesPath) { Import-Clixml $InstalledPackagesPath } else { @() }
+$InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.json"
+[array]$InstalledPackages = if (Test-Path $InstalledPackagesPath) {
+	Get-Content $InstalledPackagesPath | ConvertFrom-Json
+} else { @() }
+
+# helper functions
+function Get-PackageSources {
+	param(
+		[Parameter(Mandatory)]
+		$request
+	)
+	$Sources = if ($request.PackageSources) {
+		$script:RegisteredPackageSources | ? Name -in $request.PackageSources
+	} else { $script:RegisteredPackageSources }
+	
+	$Sources | ? {-not $_.Headers} | % {
+		if ($request.Credential) {
+			Set-PackageSourcePrivateToken -Source $_.Name -Credential $request.Credential
+		} else {
+			$msg = "Credentials are required for source $($_.Name)"
+			Write-Error -Message $msg -ErrorId CredentialsNotSpecified -Category InvalidOperation -TargetObject $_.Name
+		}
+	}
+	$Sources
+}
+
+function ConvertTo-Hashtable {
+    param(
+        [Parameter(Mandatory,ValueFromPipeline)]
+        $Object
+    )
+    Process {
+        $ht = @{}
+        $Object | Get-Member -MemberType Properties | % {
+            $ht[$_.Name] = $Object.($_.Name)
+        }
+        $ht
+    }
+}
+
+function ConvertTo-PlainText {
+	param(
+		[Parameter(Mandatory,ValueFromPipeline)]
+		[System.Security.SecureString] $SecureString
+	)
+	$marshal = [System.Runtime.InteropServices.Marshal]
+	$BSTR = $marshal::SecureStringToBSTR($SecureString)
+	$marshal::PtrToStringAuto($BSTR)
+	$marshal::ZeroFreeBSTR($BSTR)
+}
+
+function Dump-InstalledPackages {
+	$script:InstalledPackages | ConvertTo-Json |
+	Out-File $script:InstalledPackagesPath -Force
+}
 
 function Dump-RegisteredPackageSources {
-	$RegisteredPackageSources = $script:RegisteredPackageSources
-	$RegisteredPackageSources | % {
-		$_.Headers.'PRIVATE-TOKEN' = $_.Headers.'PRIVATE-TOKEN' | ConvertTo-SecureString -AsPlainText -Force
+	#$RegisteredPackageSources = $script:RegisteredPackageSources.PSObject.Copy()
+	$script:RegisteredPackageSources | ? Headers | % {
+		$_.Headers.'PRIVATE-TOKEN' = $_.Headers.'PRIVATE-TOKEN' |
+		ConvertTo-SecureString -AsPlainText -Force | ConvertFrom-SecureString
 	}
-	$RegisteredPackageSources | Export-Clixml -Path $script:PackageSourcesPath -Force
+	$script:RegisteredPackageSources | ConvertTo-Json |
+	Out-File $script:PackageSourcesPath -Force
+	Load-RegisteredPackageSources
+	#Export-Clixml -Path $script:PackageSourcesPath -Force
 }
 
 function Load-RegisteredPackageSources {
 	if (Test-Path $script:PackageSourcesPath) {
-		$RegisteredPackageSources = Import-Clixml -Path $script:PackageSourcesPath
-		$RegisteredPackageSources | % {
-			$_.Headers.'PRIVATE-TOKEN' = ConvertFrom-SecureString $_.Headers.'PRIVATE-TOKEN'
+		$RegisteredPackageSources = Get-Content $script:PackageSourcesPath |
+		ConvertFrom-Json | % {
+			$ht = ConvertTo-Hashtable $_
+			if ($ht.Headers) {
+				$Headers = @{'PRIVATE-TOKEN' = ConvertTo-SecureString $ht.Headers.'PRIVATE-TOKEN' | ConvertTo-PlainText}
+				$ht.Remove('Headers')
+			}
+			New-PackageSource @ht |
+			Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable -PassThru
+			$ht, $headers | export-clixml d:\hh.xml
 		}
+		$RegisteredPackageSources | export-clixml d:\rps1.xml
 		$script:RegisteredPackageSources = $RegisteredPackageSources
+	}
+}
+
+function Set-PackageSourcePrivateToken {
+	param(
+		[Parameter(Mandatory)]
+		[string[]] $Source,
+		[Parameter(Mandatory)]
+		[pscredential] $Credential
+	)
+	$Source | % {
+		$PackageSource = $script:RegisteredPackageSources | ? Name -eq $_
+		if (-not $PackageSource.Headers) {
+			$Auth = @{
+				login = $Credential.UserName
+				password = $Credential.GetNetworkCredential().Password
+			}
+			$Location = $PackageSource.Location.TrimEnd('/')
+			$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
+			$Headers = @{
+				'PRIVATE-TOKEN' = $PrivateToken
+				#'SUDO' = 'root'
+			}
+			$PackageSource | Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable
+			#$PackageSource.Headers = $Headers
+			#Dump-RegisteredPackageSources
+		}
+		#$PackageSource
 	}
 }
 
@@ -116,30 +209,12 @@ function Add-PackageSource {
 		[Parameter(Mandatory)]
         [bool] $Trusted
     )
-	<#
-	$Credential = $request.Options.Credential
-	if (-not $Credential) {
-		$msg = 'Credentials are required'
-        Write-Error -Message $msg -ErrorId CredentialsNotSpecified -Category InvalidOperation -TargetObject $Name
-		#throw $msg
-	} else {
-		$Auth = @{
-			login = $Credential.UserName
-			password = $Credential.GetNetworkCredential().Password
-		}
-		$Location = $Location.TrimEnd('/')
-		$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
-	#>
-	$Headers = @{
-		'PRIVATE-TOKEN' = $scipt:PrivateToken
-		'SUDO' = 'root'
-	}
-	# set superuser access
-	#if ($Auth.login -eq 'root') { $Headers.'SUDO' = 'root' }
-	$script:RegisteredPackageSources += $PSBoundParameters |
-	Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable -PassThru
-	New-PackageSource @PSBoundParameters -Registered $true
-	Dump-RegisteredPackageSources
+	$PSBoundParameters.Registered = $true
+	$PackageSource = New-PackageSource @PSBoundParameters
+	$script:RegisteredPackageSources += $PackageSource
+	#Dump-RegisteredPackageSources
+	$script:RegisteredPackageSources | export-clixml d:\rps.xml
+	$PackageSource
 }
 
 function Remove-PackageSource {
@@ -147,30 +222,29 @@ function Remove-PackageSource {
 		[Parameter(Mandatory)]
         [string] $Name
     )
-	$PackageSource = $script:RegisteredPackageSources | ? Name -like $Name
+	$PackageSource = $script:RegisteredPackageSources | ? Name -eq $Name
 	if (-not $PackageSource) {
 		$msg = 'Package source matching the specified name is not registered'
         Write-Error -Message $msg -ErrorId PackageSourceNotFound -Category InvalidOperation -TargetObject $Name
 		#throw $msg
 	} else {
 		$script:RegisteredPackageSources = @($script:RegisteredPackageSources) -ne $PackageSource
-		Dump-RegisteredPackageSources
+		#Dump-RegisteredPackageSources
 	}
 }
 
-function Resolve-PackageSource { # GetPackageSources ?
+function Resolve-PackageSources {
     $SourceName = $request.PackageSources
     if (-not $SourceName) { $SourceName = '*' }
-
+	$script:RegisteredPackageSources | export-clixml d:\rps3.xml
+	
     $SourceName | % {
         if ($request.IsCanceled) { return }
 		$PackageSource = $script:RegisteredPackageSources | ? Name -like $_
         if (-not $PackageSource) {
 			$msg = "Package source matching the name $_ not registered"
 			Write-Error -Message $msg -ErrorId PackageSourceNotFound -Category InvalidOperation -TargetObject $_
-        } else {
-			$PackageSource
-		}
+        } else { $PackageSource }
     }
 }
 
@@ -179,7 +253,7 @@ function Find-Package {
 		[Parameter(Mandatory)]
         [string[]] $Name,
         [string] $RequiredVersion,
-        [string] $MinimumVersion = '0.0',
+        [string] $MinimumVersion,
         [string] $MaximumVersion = "$([int]::MaxValue).0"
     )
     <#
@@ -200,44 +274,47 @@ function Find-Package {
 			Tag
 			Type
     #>
-	$Options = $request.Options
-
-	$Sources = @()
-	$request.PackageSources | % {
-		$Sources += $script:RegisteredPackageSources | ? Name -eq $_
+	if (-not $MinimumVersion) {
+		$MinimumVersion = '0.0'
 	}
-	if (-not $Sources) { $Sources = $script:RegisteredPackageSources }
-	
+    if (-not $MaximumVersion) {
+		$MaximumVersion = "$([int]::MaxValue).0"
+	}
+	$Options = $request.Options
+	$Sources = Get-PackageSources $request
+	$sources | Export-Clixml d:\sources.xml
 	foreach ($Source in $Sources) {
 		if ($request.IsCanceled) { return }
 		$Name | % {
-			Invoke-RestMethod -Headers $Source.Headers -Uri ($Source.Location + "/projects/search/${_}?per_page=-1") -pv Project | % {
+			$Projects = Invoke-RestMethod -Headers $Source.Headers -Uri ($Source.Location + "/projects/search/${_}?per_page=-1")
+			foreach ($Project in $Projects) {
 				$Id = $Project.id
 				$Tags = Invoke-RestMethod -Headers $Source.Headers -Uri ($Source.Location + "/projects/$Id/repository/tags?per_page=-1")
 				
 				$Tags.name | ? { [System.Version]$_ -ge $MinimumVersion -and
 								 [System.Version]$_ -le $MaximumVersion -and
-								 (-not $RequiredVersion -or [System.Version]$_ -eq $RequiredVersion)
+								 (-not $RequiredVersion -or $_ -eq $RequiredVersion)
 				} -pv Tag | % {
 					$Swid = @{
 						#FastPackageReference = 
 						Name = $Project.name
-						Version = [System.Version]$Tag
+						Version = $Tag #[System.Version]$Tag
 						VersionScheme = 'MultiPartNumeric'
+						Source = $Source.Name
 						Summary = $Project.description
-						Source = $Source.Location
-						#SearchKey <string>
-						#FullPath <string>
+						FullPath = $Source.Location + "/projects/$Id/repository/archive?sha=$Tag" # zip download link
+						FromTrustedSource = $true
 						#Filename <string>
+						#SearchKey <string>
 						#Details <hashtable>
-						#Entities <ArrayList>
-						Links = @($Source.Location + "/projects/$Id/repository/archive?sha=$Tag") # zip download link
-						#FromTrustedSource <bool>
-						#Dependencies <ArrayList> ??
-						#TagId <string> ??
+						##Entities <ArrayList> private
+						##Links <ArrayList> private
+						##Dependencies <ArrayList> private
+						##TagId <string> private
 					}
 					$Swid.FastPackageReference = $Swid | ConvertTo-Json
-					New-SoftwareIdentity @Swid
+					#New-SoftwareIdentity @Swid
+					[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
 				}
 			}
 		}
@@ -254,38 +331,37 @@ function Download-Package {
         [ValidateNotNullOrEmpty()]
         [string] $Location
     )
-	if (Test-Path $Location) {
-		if (-not $request.Options.Force) {
-			throw 'Target location already exists. Specify -Force to overwrite'
-		}
-	} else { mkdir $Location }
+	$Options = $request.Options
+	$Sources = Get-PackageSources $request
+
+	if (-not (Test-Path $Location)) { mkdir $Location }
 	Push-Location $Location
 
 	$PackageInfo = $FastPackageReference | ConvertFrom-Json
-	$Source = $script:RegisteredPackageSources | ? Location -eq $PackageInfo.Source
-
-	$OutFile = "$Location\package.tar.gz"
-	Invoke-WebRequest -Uri $FastPackageReference -Headers $Source.Headers -OutFile $OutFile
+	$Source = $Sources | ? Name -eq $PackageInfo.Source
+	$OutFile = Join-Path $Location 'package.tar.gz'
+	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
 	& cmd "/C 7z e $OutFile -so | 7z x -si -ttar"
 	mkdir $PackageInfo.Name
 	Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
-	Rename-Item -NewName $PackageInfo.Version | Move-Item -Destination $PackageInfo.Name
+	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
 	rm $OutFile
 	Pop-Location
+	
+	$Swid = $PackageInfo | ConvertTo-Hashtable
+	$Swid.FastPackageReference = $FastPackageReference
+	[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
 }
 
 function Install-Package {
     param(
         [Parameter(Mandatory)]
         [string] $FastPackageReference
-    )   	
+    )	
 	Download-Package @PSBoundParameters -Location ($env:USERPROFILE + '\Documents\WindowsPowerShell\Modules')
 	# 'C:\Program Files\WindowsPowerShell\Modules'
-	$Swid = $FastPackageReference | ConvertFrom-Json
-	$Swid.FastPackageReference = $FastPackageReference
-	New-SoftwareIdentity @Swid
-	$script:InstalledPackages += $FastPackageReference
-	$script:InstalledPackages | Export-Clixml -Path $script:InstalledPackagesPath
+	$script:InstalledPackages += $FastPackageReference | ConvertFrom-Json
+	Dump-InstalledPackages
 }
 
 function Uninstall-Package {
@@ -296,14 +372,14 @@ function Uninstall-Package {
 	$Swid = $FastPackageReference | ConvertFrom-Json
 	$Location = -join $env:USERPROFILE,'\Documents\WindowsPowerShell\Modules\',$Swid.Name,'\',$Swid.Version
 	Remove-Item $Location -Recurse
-	$script:InstalledPackages = @($script:InstalledPackages) -ne $FastPackageReference
-	$script:InstalledPackages | Export-Clixml -Path $script:InstalledPackagesPath
+	$script:InstalledPackages = $script:InstalledPackages -ne ($FastPackageReference | ConvertFrom-Json)
+	Dump-InstalledPackages
 }
 
 function Get-InstalledPackage {
 	$script:InstalledPackages | % {
-		$Swid = ConvertFrom-Json $_
-		$Swid.FastPackageReference = $_
-		New-SoftwareIdentity @Swid
+		$Swid = ConvertTo-Hashtable $_
+		$Swid.FastPackageReference = $_ | ConvertTo-Json
+		[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
 	}
 }
