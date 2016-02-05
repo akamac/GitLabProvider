@@ -23,7 +23,7 @@
 	VariablesToExport = '*'
 	AliasesToExport = '*'
 	# ModuleList = @()
-	FileList = 'PackageProviderFunctions.ps1', 'GitLabProvider.psm1'
+	FileList = 'PackageProviderFunctions.ps1','HelperFunctions.ps1','GitLabProvider.psm1'
 	PrivateData = @{'PackageManagementProviders' = 'GitLabProvider.psm1'}
 	# HelpInfoURI = ''
 	# DefaultCommandPrefix = ''
