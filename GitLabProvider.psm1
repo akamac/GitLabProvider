@@ -1,4 +1,10 @@
-. $PSScriptRoot\HelperFunctions.ps1
+﻿. $PSScriptRoot\HelperFunctions.ps1
+
+try {
+	Get-Command 7z
+} catch {
+	throw '7zip should be in the PATH'
+}
 
 $RegisteredPackageSources = @()
 
@@ -6,6 +12,7 @@ $InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.json"
 [array]$InstalledPackages = if (Test-Path $InstalledPackagesPath) {
 	Get-Content $InstalledPackagesPath | ConvertFrom-Json
 } else { @() }
+
 
 function Get-PackageProviderName { 
     return 'GitLab'
@@ -72,12 +79,12 @@ function Remove-PackageSource {
 		#Dump-RegisteredPackageSources
 	}
 }
-
+$i = 0
 function Resolve-PackageSources {
     $SourceName = $request.PackageSources
     if (-not $SourceName) { $SourceName = '*' }
 	
-    $SourceName | % {
+	$SourceName | % {
         if ($request.IsCanceled) { return }
 		$PackageSource = $script:RegisteredPackageSources | ? Name -like $_
         if (-not $PackageSource) {
@@ -110,35 +117,79 @@ function Find-Package {
 	$Sources = Get-PackageSources $request
 	foreach ($Source in $Sources) {
 		if ($request.IsCanceled) { return }
+		$h = @{Headers = $Source.Headers}
 		$Name | % {
-			$Projects = Invoke-RestMethod -Headers $Source.Headers -Uri ($Source.Location + "/projects/search/${_}?per_page=-1")
+			$Projects = Invoke-RestMethod @h ($Source.Location + "/projects/search/${_}?per_page=-1")
 			foreach ($Project in $Projects) {
-				$Id = $Project.id
-				$Tags = Invoke-RestMethod -Headers $Source.Headers -Uri ($Source.Location + "/projects/$Id/repository/tags?per_page=-1")
-				
-				$Tags.name | ? { [System.Version]$_ -ge $MinimumVersion -and
-								 [System.Version]$_ -le $MaximumVersion -and
-								 (-not $RequiredVersion -or $_ -eq $RequiredVersion)
+				$ProjectId = $Project.id
+				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=-1")
+
+				$Tags | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+							[System.Version]($_.name) -le $MaximumVersion -and
+							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
 				} -pv Tag | % {
+					$TagName = $Tag.name
+					$CommitId = $Tag.commit.id
+
+					# retrieve dependencies
+					$ProjectTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?per_page=-1")
+					$ManifestFileName = ($ProjectTree | ? Name -like *.psd1).name
+					$ManifestFilePath = [System.IO.Path]::GetTempFileName()
+					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
+					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
+					$Dependencies = New-Object System.Collections.ArrayList
+					@($ModuleManifest.RequiredModules) -ne $null | % {
+						#$DependantProject = Invoke-RestMethod @h ($Source.Location + "/projects/search/$($_.ModuleName)?per_page=-1")
+						#$DependantSwid = @{
+						<#
+						@{
+							#FastPackageReference = 
+							Name = $_.ModuleName
+							Version = $_.ModuleVersion
+							VersionScheme = 'MultiPartNumeric'
+							Source = $Source.Name
+							Summary = $DependantProject.description
+							FullPath = $Source.Location + "/projects/$($DependantProject.id)/repository/archive?sha=$($_.ModuleVersion)" # zip download link
+							FromTrustedSource = $true
+							Filename = ''
+							SearchKey = ''
+							Details = @{}
+							Entities = @()
+							Links = @()
+							Dependencies = @()
+							#TagId <string>
+						} | ConvertTo-Json
+						#>
+						#$DependantSwid.FastPackageReference = $DependantSwid | ConvertTo-Json
+						#New-SoftwareIdentity @DependantSwid
+						$Dependency = @{
+							ProviderName = Get-PackageProviderName
+							PackageName = $_.ModuleName
+							Version = $_.ModuleVersion
+							Source = $Source.Name
+							AppliesTo = $null
+						}
+						[void]$Dependencies.Add((New-Dependency @Dependency))
+					}
 					$Swid = @{
 						#FastPackageReference = 
 						Name = $Project.name
-						Version = $Tag #[System.Version]$Tag
+						Version = $TagName #[System.Version]$Tag
 						VersionScheme = 'MultiPartNumeric'
 						Source = $Source.Name
 						Summary = $Project.description
-						FullPath = $Source.Location + "/projects/$Id/repository/archive?sha=$Tag" # zip download link
+						FullPath = $Source.Location + "/projects/$ProjectId/repository/archive?sha=$TagName" # zip download link
 						FromTrustedSource = $true
-						#Filename <string>
-						#SearchKey <string>
-						#Details <hashtable>
-						##Entities <ArrayList> private
-						##Links <ArrayList> private
-						##Dependencies <ArrayList> private
-						##TagId <string> private
+						Filename = ''
+						SearchKey = ''
+						Details = @{}
+						Entities = @()
+						Links = @()
+						Dependencies = $Dependencies # array of json
+						#TagId <string>
 					}
 					$Swid.FastPackageReference = $Swid | ConvertTo-Json
-					[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
+					New-SoftwareIdentity @Swid
 				}
 			}
 		}
@@ -175,7 +226,8 @@ function Download-Package {
 	
 	$Swid = $PackageInfo | ConvertTo-Hashtable
 	$Swid.FastPackageReference = $FastPackageReference
-	[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
+	#[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
+	New-SoftwareIdentity @Swid
 }
 
 function Install-Package {
@@ -193,7 +245,7 @@ function Uninstall-Package {
     param(
         [Parameter(Mandatory)]
         [string] $FastPackageReference
-    )   	
+    )
 	$Swid = $FastPackageReference | ConvertFrom-Json
 	$Location = $env:USERPROFILE,'\Documents\WindowsPowerShell\Modules\',$Swid.Name,'\',$Swid.Version -join ''
 	Remove-Item $Location -Recurse
@@ -205,6 +257,18 @@ function Get-InstalledPackage {
 	$script:InstalledPackages | % {
 		$Swid = ConvertTo-Hashtable $_
 		$Swid.FastPackageReference = $_ | ConvertTo-Json
-		[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
+		New-SoftwareIdentity @Swid
+	}
+}
+
+function Get-PackageDependencies {
+	param(
+        [Parameter(Mandatory)]
+        [string] $FastPackageReference
+    )
+	$Swid = $FastPackageReference | ConvertFrom-Json
+	$Swid.Dependencies | % {
+		Find-Package -Name $_.PackageName -RequiredVersion $_.Version
+		#ProviderName,Source
 	}
 }
