@@ -5,10 +5,12 @@ Sample usage:
 ```
 Import-PackageProvider GitLab
 Register-PackageSource -ProviderName GitLab -Name <Company> -Location 'https://gitlab.domain.local/api/v3' -Trusted  
-Find-Package -ProviderName GitLab -Source <Company> -Name <PackageName> -Credential $Credential  
-Save-Package -Name <PackageName> -Path D:\ -ProviderName GitLab  
-Install-Package -Name <PackageName> -ProviderName GitLab  
-Get-Package -ProviderName GitLab  
+
+Find-Package -ProviderName GitLab -Source <Company> -Name <PackageName> -Credential $Credential -IncludeDependencies | Install-Package  
+
+Get-Package -Name <PackageName> -ProviderName GitLab |  
+Save-Package -Path D:\ -ProviderName GitLab  
+
 Uninstall-Package -Name <PackageName> -ProviderName GitLab  
 ```
 
