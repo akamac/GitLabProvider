@@ -1,31 +1,39 @@
 ﻿. $PSScriptRoot\HelperFunctions.ps1
 
 try {
-	Get-Command 7z
+	Get-Command 7z -ea Stop
 } catch {
-	throw '7zip should be in the PATH'
+	throw '7zip should be in the PATH' # is not visible!
 }
 
-$RegisteredPackageSources = @()
+function Initialize-Provider {
+    Write-Verbose "Initializing provider $ProviderName"
+	# does not execute!
+}
 
-$InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.json"
-[array]$InstalledPackages = if (Test-Path $InstalledPackagesPath) {
-	Get-Content $InstalledPackagesPath | ConvertFrom-Json
-} else { @() }
+function Get-PackageProviderName {
+	# actual initialization
+	if (-not $Initialized) {
+		$script:RegisteredPackageSourcesPath = "$PSScriptRoot\PackageSources.json"
+		[array]$script:RegisteredPackageSources = if (Test-Path $RegisteredPackageSourcesPath) {
+			Get-Content $RegisteredPackageSourcesPath | ConvertFrom-Json | % {
+				Add-PackageSource -Name $_.Name -Location $_.Location -Trusted $_.IsTrusted
+			}
+		} else { @() }
+	
+		$script:InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.json"
+		[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
+			Get-Content $InstalledPackagesPath | ConvertFrom-Json
+		} else { @() }
+		
+		$script:Initialized = $true
+	}
 
-
-function Get-PackageProviderName { 
     return 'GitLab'
 }
 
-function Initialize-Provider { 
-    Write-Verbose "Initializing provider $ProviderName"
-}
-
 function Get-Feature {
-    New-Feature -name 'supports-powershell-modules'
-    #New-Feature -name 'supports-regex-search'
-    New-Feature -name 'supports-wildcard-search'
+    New-Feature -Name 'supports-powershell-modules'
 }
 
 function Get-DynamicOptions {
@@ -34,16 +42,14 @@ function Get-DynamicOptions {
         [Microsoft.PackageManagement.MetaProvider.PowerShell.OptionCategory] $Category
     )
     switch ($Category) {
-        # for searching for packages
-		Package {
-			#New-DynamicOption -Category $category -Name Filter -ExpectedType String -IsRequired $false
-        }
-		# for package sources
-		Source {}
-		Provider {}
+		Package {} # for Find-Package
+		Source {} # for Add/Remove-PackageSource
+		Provider {} # not used
 		# for Install/Uninstall/Get-InstalledPackage
         Install {
-			#New-DynamicOption -Category $category -Name Destination -ExpectedType String -IsRequired $true
+			New-DynamicOption -Category $Category -Name Location -ExpectedType String -IsRequired $false
+			New-DynamicOption -Category $Category -Name User -ExpectedType String -IsRequired $false
+			#New-DynamicOption -Category $Category -Name System -ExpectedType String -IsRequired $false
 		}
     }
 }
@@ -61,7 +67,7 @@ function Add-PackageSource {
 	$PSBoundParameters.Registered = $true
 	$PackageSource = New-PackageSource @PSBoundParameters
 	$script:RegisteredPackageSources += $PackageSource
-	#Dump-RegisteredPackageSources
+	Dump-RegisteredPackageSources
 	$PackageSource
 }
 
@@ -76,10 +82,10 @@ function Remove-PackageSource {
         Write-Error -Message $msg -ErrorId PackageSourceNotFound -Category InvalidOperation -TargetObject $Name
 	} else {
 		$script:RegisteredPackageSources = @($script:RegisteredPackageSources) -ne $PackageSource
-		#Dump-RegisteredPackageSources
+		Dump-RegisteredPackageSources
 	}
 }
-$i = 0
+
 function Resolve-PackageSources {
     $SourceName = $request.PackageSources
     if (-not $SourceName) { $SourceName = '*' }
@@ -102,11 +108,6 @@ function Find-Package {
         [string] $MinimumVersion,
         [string] $MaximumVersion = "$([int]::MaxValue).0"
     )
-    <#
-        $request.Options; implement:
-			Filter
-			IncludeDependencies
-    #>
 	if (-not $MinimumVersion) {
 		$MinimumVersion = '0.0'
 	}
@@ -124,7 +125,7 @@ function Find-Package {
 				$ProjectId = $Project.id
 				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=-1")
 
-				$Tags | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+				$Tags | Sort -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
 							[System.Version]($_.name) -le $MaximumVersion -and
 							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
 				} -pv Tag | % {
@@ -138,30 +139,8 @@ function Find-Package {
 					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
 					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
 					$Dependencies = New-Object System.Collections.ArrayList
+					# GitLab dependencies (PowerShell modules)
 					@($ModuleManifest.RequiredModules) -ne $null | % {
-						#$DependantProject = Invoke-RestMethod @h ($Source.Location + "/projects/search/$($_.ModuleName)?per_page=-1")
-						#$DependantSwid = @{
-						<#
-						@{
-							#FastPackageReference = 
-							Name = $_.ModuleName
-							Version = $_.ModuleVersion
-							VersionScheme = 'MultiPartNumeric'
-							Source = $Source.Name
-							Summary = $DependantProject.description
-							FullPath = $Source.Location + "/projects/$($DependantProject.id)/repository/archive?sha=$($_.ModuleVersion)" # zip download link
-							FromTrustedSource = $true
-							Filename = ''
-							SearchKey = ''
-							Details = @{}
-							Entities = @()
-							Links = @()
-							Dependencies = @()
-							#TagId <string>
-						} | ConvertTo-Json
-						#>
-						#$DependantSwid.FastPackageReference = $DependantSwid | ConvertTo-Json
-						#New-SoftwareIdentity @DependantSwid
 						$Dependency = @{
 							ProviderName = Get-PackageProviderName
 							PackageName = $_.ModuleName
@@ -171,8 +150,12 @@ function Find-Package {
 						}
 						[void]$Dependencies.Add((New-Dependency @Dependency))
 					}
+					# other dependencies (chocolatey bin / nuget dll)
+					@($ModuleManifest.PrivateData.RequiredPackages) -ne $null | % {
+						$Dependency = $_.CanonicalId.Split(':/#') # 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
+						[void]$Dependencies.Add((New-Dependency @Dependency))
+					}
 					$Swid = @{
-						#FastPackageReference = 
 						Name = $Project.name
 						Version = $TagName #[System.Version]$Tag
 						VersionScheme = 'MultiPartNumeric'
@@ -190,6 +173,7 @@ function Find-Package {
 					}
 					$Swid.FastPackageReference = $Swid | ConvertTo-Json
 					New-SoftwareIdentity @Swid
+					if (-not $Options.AllVersions) { break }
 				}
 			}
 		}
@@ -226,7 +210,6 @@ function Download-Package {
 	
 	$Swid = $PackageInfo | ConvertTo-Hashtable
 	$Swid.FastPackageReference = $FastPackageReference
-	#[Microsoft.PackageManagement.MetaProvider.PowerShell.SoftwareIdentity]$Swid
 	New-SoftwareIdentity @Swid
 }
 
@@ -234,10 +217,23 @@ function Install-Package {
     param(
         [Parameter(Mandatory)]
         [string] $FastPackageReference
-    )	
-	Download-Package @PSBoundParameters -Location ($env:USERPROFILE + '\Documents\WindowsPowerShell\Modules')
-	# 'C:\Program Files\WindowsPowerShell\Modules'
-	$script:InstalledPackages += $FastPackageReference | ConvertFrom-Json
+    )
+	$Location = if ($request.Options.Location) {
+		$request.Options.Location
+	} elseif ($request.Options.User) {
+		"$env:USERPROFILE\Documents\WindowsPowerShell\Modules\"
+	} else {
+		'C:\Program Files\WindowsPowerShell\Modules'
+	}
+	Download-Package @PSBoundParameters -Location $Location
+	$Swid = $FastPackageReference | ConvertFrom-Json
+	$Param = @{
+		MemberType = 'NoteProperty'
+		Name = 'Location'
+		Value = $Location
+		TypeName = 'string'
+	}
+	$script:InstalledPackages += $Swid | Add-Member @Param -PassThru
 	Dump-InstalledPackages
 }
 
@@ -247,14 +243,19 @@ function Uninstall-Package {
         [string] $FastPackageReference
     )
 	$Swid = $FastPackageReference | ConvertFrom-Json
-	$Location = $env:USERPROFILE,'\Documents\WindowsPowerShell\Modules\',$Swid.Name,'\',$Swid.Version -join ''
-	Remove-Item $Location -Recurse
-	$script:InstalledPackages = $script:InstalledPackages | ? { $_.Name -ne $Swid.Name -and $_.Version -ne $Swid.Version }
+	$Package = $script:InstalledPackages | ? { $_.Name -eq $Swid.Name -and $_.Version -eq $Swid.Version }
+	$Location = Join-Path $Package.Location $Swid.Name
+	Remove-Item "$Location\$($Swid.Version)" -Recurse
+	if (-not (Test-Path "$Location\*")) {
+		Remove-Item $Location
+	}
+	$script:InstalledPackages = $script:InstalledPackages -ne $Package
 	Dump-InstalledPackages
 }
 
 function Get-InstalledPackage {
-	$script:InstalledPackages | % {
+	$script:InstalledPackages | ? Location -match ([regex]::Escape($request.Options.Location)) |
+	Select * -ExcludeProperty Location | % {
 		$Swid = ConvertTo-Hashtable $_
 		$Swid.FastPackageReference = $_ | ConvertTo-Json
 		New-SoftwareIdentity @Swid

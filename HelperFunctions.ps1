@@ -1,3 +1,13 @@
+function Dump-InstalledPackages {
+	$script:InstalledPackages | ConvertTo-Json |
+	Out-File $script:InstalledPackagesPath -Force
+}
+
+function Dump-RegisteredPackageSources {
+	$script:RegisteredPackageSources | Select * -ExcludeProperty Headers | ConvertTo-Json |
+	Out-File $script:RegisteredPackageSourcesPath -Force
+}
+
 function Get-PackageSources {
 	param(
 		[Parameter(Mandatory)]
@@ -16,36 +26,6 @@ function Get-PackageSources {
 		}
 	}
 	$Sources
-}
-
-function ConvertTo-Hashtable {
-    param(
-        [Parameter(Mandatory,ValueFromPipeline)]
-        $Object
-    )
-    Process {
-        $ht = @{}
-        $Object | Get-Member -MemberType Properties | % {
-            $ht[$_.Name] = $Object.($_.Name)
-        }
-        $ht
-    }
-}
-<#
-function ConvertTo-PlainText {
-	param(
-		[Parameter(Mandatory,ValueFromPipeline)]
-		[System.Security.SecureString] $SecureString
-	)
-	$marshal = [System.Runtime.InteropServices.Marshal]
-	$BSTR = $marshal::SecureStringToBSTR($SecureString)
-	$marshal::PtrToStringAuto($BSTR)
-	$marshal::ZeroFreeBSTR($BSTR)
-}
-#>
-function Dump-InstalledPackages {
-	$script:InstalledPackages | ConvertTo-Json |
-	Out-File $script:InstalledPackagesPath -Force
 }
 
 function Set-PackageSourcePrivateToken {
@@ -69,9 +49,20 @@ function Set-PackageSourcePrivateToken {
 				#'SUDO' = 'root'
 			}
 			$PackageSource | Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable
-			#$PackageSource.Headers = $Headers
-			#Dump-RegisteredPackageSources
 		}
-		#$PackageSource
 	}
+}
+
+function ConvertTo-Hashtable {
+    param(
+        [Parameter(Mandatory,ValueFromPipeline)]
+        $Object
+    )
+    Process {
+        $ht = @{}
+        $Object | Get-Member -MemberType Properties | % {
+            $ht[$_.Name] = $Object.($_.Name)
+        }
+        $ht
+    }
 }
