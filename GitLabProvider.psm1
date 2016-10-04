@@ -125,7 +125,7 @@ function Find-Package {
 				$ProjectId = $Project.id
 				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=-1")
 
-				$Tags | Sort -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+				$Tags | Sort name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
 							[System.Version]($_.name) -le $MaximumVersion -and
 							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
 				} -pv Tag | % {
@@ -200,7 +200,7 @@ function Download-Package {
 	$Source = $Sources | ? Name -eq $PackageInfo.Source
 	$OutFile = Join-Path $Location 'package.tar.gz'
 	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
-	& cmd "/C 7z e $OutFile -so | 7z x -si -ttar"
+	& cmd "/C 7z e `"$OutFile`" -so | 7z x -si -ttar"
 	mkdir $PackageInfo.Name -ea SilentlyContinue
 	Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
 	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
