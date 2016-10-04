@@ -254,7 +254,24 @@ function Uninstall-Package {
 }
 
 function Get-InstalledPackage {
-	$script:InstalledPackages | ? Location -match ([regex]::Escape($request.Options.Location)) |
+	param(
+        [string] $Name,
+        [string] $RequiredVersion,
+        [string] $MinimumVersion,
+        [string] $MaximumVersion = "$([int]::MaxValue).0"
+    )
+	if (-not $MinimumVersion) {
+		$MinimumVersion = '0.0'
+	}
+    if (-not $MaximumVersion) {
+		$MaximumVersion = "$([int]::MaxValue).0"
+	}
+
+	$script:InstalledPackages | ? Name -match $Name | Sort Version -Descending | ? {
+		[System.Version]($_.Version) -ge $MinimumVersion -and
+		[System.Version]($_.Version) -le $MaximumVersion -and
+		(-not $RequiredVersion -or $_.Version -eq $RequiredVersion)
+	} | ? Location -match ([regex]::Escape($request.Options.Location)) |
 	Select * -ExcludeProperty Location | % {
 		$Swid = ConvertTo-Hashtable $_
 		$Swid.FastPackageReference = $_ | ConvertTo-Json
