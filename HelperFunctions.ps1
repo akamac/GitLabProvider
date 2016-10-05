@@ -1,5 +1,6 @@
 function Dump-InstalledPackages {
-	$script:InstalledPackages | ConvertTo-Json |
+	param($InstalledPackages)
+	$InstalledPackages | ConvertTo-Json |
 	Out-File $script:InstalledPackagesPath -Force
 }
 

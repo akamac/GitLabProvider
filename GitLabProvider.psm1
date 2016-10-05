@@ -24,9 +24,6 @@ function Get-PackageProviderName {
 		} else { @() }
 	
 		$script:InstalledPackagesPath = "$ConfigFolder\InstalledPackages.json"
-		[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
-			Get-Content $InstalledPackagesPath | ConvertFrom-Json
-		} else { @() }
 		
 		$script:Initialized = $true
 	}
@@ -235,8 +232,11 @@ function Install-Package {
 		Value = $Location
 		TypeName = 'string'
 	}
-	$script:InstalledPackages += $Swid | Add-Member @Param -PassThru
-	Dump-InstalledPackages
+	[array]$InstalledPackages = if (Test-Path $InstalledPackagesPath) {
+		Get-Content $InstalledPackagesPath | ConvertFrom-Json
+	} else { @() }
+	$InstalledPackages += $Swid | Add-Member @Param -PassThru
+	Dump-InstalledPackages $InstalledPackages
 }
 
 function Uninstall-Package {
@@ -245,14 +245,15 @@ function Uninstall-Package {
         [string] $FastPackageReference
     )
 	$Swid = $FastPackageReference | ConvertFrom-Json
+	#[array]$InstalledPackages = Get-Content $InstalledPackagesPath | ConvertFrom-Json
 	$Package = $script:InstalledPackages | ? { $_.Name -eq $Swid.Name -and $_.Version -eq $Swid.Version }
 	$Location = Join-Path $Package.Location $Swid.Name
 	Remove-Item "$Location\$($Swid.Version)" -Recurse
 	if (-not (Test-Path "$Location\*")) {
 		Remove-Item $Location
 	}
-	$script:InstalledPackages = $script:InstalledPackages -ne $Package
-	Dump-InstalledPackages
+	$InstalledPackages = $InstalledPackages -ne $Package
+	Dump-InstalledPackages $InstalledPackages
 }
 
 function Get-InstalledPackage {
@@ -269,7 +270,10 @@ function Get-InstalledPackage {
 		$MaximumVersion = "$([int]::MaxValue).0"
 	}
 
-	$script:InstalledPackages | ? Name -match $Name | Sort Version -Descending | ? {
+	[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
+		Get-Content $InstalledPackagesPath | ConvertFrom-Json
+	} else { @() }
+	$InstalledPackages | ? Name -match $Name | Sort Version -Descending | ? {
 		[System.Version]($_.Version) -ge $MinimumVersion -and
 		[System.Version]($_.Version) -le $MaximumVersion -and
 		(-not $RequiredVersion -or $_.Version -eq $RequiredVersion)
