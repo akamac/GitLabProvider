@@ -14,14 +14,16 @@ function Initialize-Provider {
 function Get-PackageProviderName {
 	# actual initialization
 	if (-not $Initialized) {
-		$script:RegisteredPackageSourcesPath = "$PSScriptRoot\PackageSources.json"
+		$ConfigFolder = 'C:\ProgramData\GitLabProvider'
+		if (-not (Test-Path $ConfigFolder)) { mkdir $ConfigFolder }
+		$script:RegisteredPackageSourcesPath = "$ConfigFolder\PackageSources.json"
 		[array]$script:RegisteredPackageSources = if (Test-Path $RegisteredPackageSourcesPath) {
 			Get-Content $RegisteredPackageSourcesPath | ConvertFrom-Json | % {
 				Add-PackageSource -Name $_.Name -Location $_.Location -Trusted $_.IsTrusted
 			}
 		} else { @() }
 	
-		$script:InstalledPackagesPath = "$PSScriptRoot\InstalledPackages.json"
+		$script:InstalledPackagesPath = "$ConfigFolder\InstalledPackages.json"
 		[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
 			Get-Content $InstalledPackagesPath | ConvertFrom-Json
 		} else { @() }
