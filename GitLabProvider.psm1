@@ -1,11 +1,5 @@
 ﻿. $PSScriptRoot\HelperFunctions.ps1
 
-try {
-	Get-Command 7z -ea Stop
-} catch {
-	throw '7zip should be in the PATH' # is not visible!
-}
-
 function Initialize-Provider {
     Write-Verbose "Initializing provider $ProviderName"
 	# does not execute!
@@ -138,7 +132,7 @@ function Find-Package {
 					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
 					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
 					$Dependencies = New-Object System.Collections.ArrayList
-					# GitLab dependencies (PowerShell modules)
+					<#
 					@($ModuleManifest.RequiredModules) -ne $null | % {
 						$Dependency = @{
 							ProviderName = Get-PackageProviderName
@@ -149,7 +143,8 @@ function Find-Package {
 						}
 						[void]$Dependencies.Add((New-Dependency @Dependency))
 					}
-					# other dependencies (chocolatey bin / nuget dll)
+					#>
+					# GitLab / PSGallery / chocolatey / nuget
 					@($ModuleManifest.PrivateData.RequiredPackages) -ne $null | % {
 						$Dependency = $_.CanonicalId.Split(':/#') # 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
 						[void]$Dependencies.Add((New-Dependency @Dependency))
@@ -199,7 +194,9 @@ function Download-Package {
 	$Source = $Sources | ? Name -eq $PackageInfo.Source
 	$OutFile = Join-Path $Location 'package.tar.gz'
 	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
-	& cmd "/C 7z e `"$OutFile`" -so | 7z x -si -ttar"
+	Push-Location $PSScriptRoot
+	& cmd "/C .\7z.exe e `"$OutFile`" -so | 7z x -si -ttar"
+	Pop-Location
 	mkdir $PackageInfo.Name -ea SilentlyContinue
 	Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
 	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
