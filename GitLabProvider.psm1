@@ -194,9 +194,13 @@ function Download-Package {
 	$Source = $Sources | ? Name -eq $PackageInfo.Source
 	$OutFile = Join-Path $Location 'package.tar.gz'
 	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
-	Push-Location $PSScriptRoot
-	& cmd "/C .\7z.exe e `"$OutFile`" -so | 7z x -si -ttar"
-	Pop-Location
+	$cmd =
+		'/S /C "',
+		"$PSSCriptRoot\7z.exe",
+		' e ',
+		$OutFile,
+		' -so | 7z x -si -ttar"' -join '"'
+	& cmd $cmd
 	mkdir $PackageInfo.Name -ea SilentlyContinue
 	Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
 	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
