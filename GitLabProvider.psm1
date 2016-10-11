@@ -155,7 +155,7 @@ function Find-Package {
 						VersionScheme = 'MultiPartNumeric'
 						Source = $Source.Name
 						Summary = $Project.description
-						FullPath = $Source.Location + "/projects/$ProjectId/repository/archive?sha=$TagName" # zip download link
+						FullPath = $Source.Location + "/projects/$ProjectId/repository/archive.zip?sha=$TagName" # zip download link
 						FromTrustedSource = $true
 						Filename = ''
 						SearchKey = ''
@@ -192,20 +192,12 @@ function Download-Package {
 
 	$PackageInfo = $FastPackageReference | ConvertFrom-Json
 	$Source = $Sources | ? Name -eq $PackageInfo.Source
-	$OutFile = Join-Path $Location 'package.tar.gz'
-	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
-	$cmd =
-		'/S /C "',
-		"$PSSCriptRoot\7z.exe",
-		' e ',
-		$OutFile,
-		' -so | 7z x -si -ttar"' -join '"'
-	& cmd $cmd
+	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile package.zip
+	Expand-Archive -Path package.zip -DestinationPath .
 	mkdir $PackageInfo.Name -ea SilentlyContinue
-	Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
+	(Resolve-Path "$($PackageInfo.Name)-$($PackageInfo.Version)*").Path |
 	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
-	rm $OutFile
-	rm pax_global_header
+	rm package.zip
 	Pop-Location
 	
 	$Swid = $PackageInfo | ConvertTo-Hashtable
