@@ -126,25 +126,23 @@ function Find-Package {
 					$CommitId = $Tag.commit.id
 
 					# retrieve dependencies
-					$ProjectTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?per_page=-1")
-					$ManifestFileName = ($ProjectTree | ? Name -like *.psd1).name
+					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=${CommitId}&per_page=-1")
+					
+					$ManifestFileName = ($RepositoryTree | ? Name -like *.psd1).name
 					$ManifestFilePath = [System.IO.Path]::GetTempFileName()
 					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
 					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
-					$Dependencies = New-Object System.Collections.ArrayList
-					<#
-					@($ModuleManifest.RequiredModules) -ne $null | % {
-						$Dependency = @{
-							ProviderName = Get-PackageProviderName
-							PackageName = $_.ModuleName
-							Version = $_.ModuleVersion
-							Source = $Source.Name
-							AppliesTo = $null
-						}
-						[void]$Dependencies.Add((New-Dependency @Dependency))
+					rm $ManifestFilePath
+
+					if ($RepositoryTree | ? Name -eq .gitmodules) {
+						$SubmodulesFilePath = [System.IO.Path]::GetTempFileName()
+						Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=.gitmodules") -OutFile $SubmodulesFilePath
+						$Submodules = Get-GitSubmodules $SubmodulesFilePath
+						rm $SubmodulesFilePath
 					}
-					#>
+
 					# GitLab / PSGallery / chocolatey / nuget
+					$Dependencies = New-Object System.Collections.ArrayList
 					@($ModuleManifest.PrivateData.RequiredPackages) -ne $null | % {
 						$Dependency = $_.CanonicalId.Split(':/#') # 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
 						[void]$Dependencies.Add((New-Dependency @Dependency))
@@ -159,13 +157,16 @@ function Find-Package {
 						FromTrustedSource = $true
 						Filename = ''
 						SearchKey = ''
-						Details = @{}
+						Details = @{
+							CommitId = $CommitId
+							Submodules = @($Submodules)
+						}
 						Entities = @()
 						Links = @()
 						Dependencies = $Dependencies # array of json
 						#TagId <string>
 					}
-					$Swid.FastPackageReference = $Swid | ConvertTo-Json
+					$Swid.FastPackageReference = $Swid | ConvertTo-Json -Depth 3
 					New-SoftwareIdentity @Swid
 					if (-not $Options.AllVersions) { break }
 				}
@@ -186,17 +187,30 @@ function Download-Package {
     )
 	$Options = $request.Options
 	$Sources = Get-PackageSources $request
+	$PackageInfo = $FastPackageReference | ConvertFrom-Json
+	$Source = $Sources | ? Name -eq $PackageInfo.Source
+	$h = @{Headers = $Source.Headers}
 
 	if (-not (Test-Path $Location)) { mkdir $Location }
 	Push-Location $Location
-
-	$PackageInfo = $FastPackageReference | ConvertFrom-Json
-	$Source = $Sources | ? Name -eq $PackageInfo.Source
-	Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile package.zip
-	Expand-Archive -Path package.zip -DestinationPath .
 	mkdir $PackageInfo.Name -ea SilentlyContinue
-	(Resolve-Path "$($PackageInfo.Name)-$($PackageInfo.Version)*").Path |
-	Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
+	Invoke-WebRequest @h -Uri $PackageInfo.FullPath -OutFile package.zip
+	Expand-Archive -Path package.zip -DestinationPath .
+	$UncompressedPath = "$($PackageInfo.Name)-$($PackageInfo.Version)-$($PackageInfo.Details.CommitId)"
+	# Submodule handling (from the same source)
+	$PackageInfo.Details.Submodules -ne $null | % {
+		$RepositoryTreeUrl = $PackageInfo.FullPath -replace [regex]::Escape("/archive.zip?sha=$($PackageInfo.Version)"),"/tree?ref=$($PackageInfo.Details.CommitId)"
+		$RepositoryTree = Invoke-RestMethod @h -Uri $RepositoryTreeUrl
+		$SubmoduleCommitId = ($RepositoryTree | ? name -eq $_.path).id
+		Invoke-WebRequest @h -Uri ($_.url + "/repository/archive.zip?ref=$SubmoduleCommitId") -OutFile submodule.zip
+		Expand-Archive -Path submodule.zip -DestinationPath .
+		$UncompressedSubmodulePath = (Resolve-Path "*$SubmoduleCommitId").Path
+		Move-Item -Path ($UncompressedSubmodulePath + '\*') -Destination (Join-Path $UncompressedPath $_.path)
+		rm submodule.zip
+		rm $UncompressedSubmodulePath
+	}
+	Rename-Item -Path $UncompressedPath -NewName $PackageInfo.Version -PassThru |
+	Move-Item -Destination $PackageInfo.Name
 	rm package.zip
 	Pop-Location
 	
@@ -273,7 +287,7 @@ function Get-InstalledPackage {
 	} | ? Location -match ([regex]::Escape($request.Options.Location)) |
 	Select * -ExcludeProperty Location | % {
 		$Swid = ConvertTo-Hashtable $_
-		$Swid.FastPackageReference = $_ | ConvertTo-Json
+		$Swid.FastPackageReference = $_ | ConvertTo-Json -Depth 3
 		New-SoftwareIdentity @Swid
 	}
 }
