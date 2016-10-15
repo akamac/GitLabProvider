@@ -57,13 +57,41 @@ function Set-PackageSourcePrivateToken {
 function ConvertTo-Hashtable {
     param(
         [Parameter(Mandatory,ValueFromPipeline)]
-        $Object
+        [array] $Object,
+        [int] $Depth = 3
     )
     Process {
-        $ht = @{}
-        $Object | Get-Member -MemberType Properties | % {
-            $ht[$_.Name] = $Object.($_.Name)
+        foreach ($obj in $Object) {
+            if (!$Depth) { return $obj }
+            $ht = [ordered]@{}
+            if ($obj -as [hashtable]) {
+                ($obj -as [hashtable]).GetEnumerator() | % {
+                    if ($_.Value -is [PSCustomObject]) {
+                        $ht.($_.Key) = ConvertTo-Hashtable ($_.Value) ($Depth - 1)
+                    } else {
+                        $ht.($_.Key) = $_.Value
+                    }
+                }
+                return $ht
+            } elseif ($obj.GetType().Name -eq 'PSCustomObject') {
+                $obj | Get-Member -MemberType Properties | % {
+                    $ht.($_.Name) = ConvertTo-Hashtable (,$obj.($_.Name)) ($Depth - 1)
+                }
+                return $ht
+            } else {
+                return $obj
+            }
         }
-        $ht
     }
+}
+
+function Get-GitSubmodules {
+	param(
+		[Parameter(Mandatory)]
+		[ValidateScript({Test-Path $_})]
+		$Path
+	)
+	(Get-Content $Path -Raw).Split('[]') -ne '' | % -Begin { $i = 0 } {
+		if ($i++ % 2) { [PSCustomObject](ConvertFrom-StringData $_) }
+	}
 }

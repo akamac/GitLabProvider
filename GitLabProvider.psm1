@@ -142,53 +142,53 @@ function Find-Package {
                     $TagName = $Tag.name
                     $CommitId = $Tag.commit.id
 
-                    # retrieve dependencies
-                    $ProjectTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?per_page=-1")
-                    $ManifestFileName = ($ProjectTree | ? Name -like *.psd1).name
-                    $ManifestFilePath = [System.IO.Path]::GetTempFileName()
-                    Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
-                    $ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
-                    $Dependencies = New-Object System.Collections.ArrayList
-                    <#
-                    @($ModuleManifest.RequiredModules) -ne $null | % {
-                        $Dependency = @{
-                            ProviderName = Get-PackageProviderName
-                            PackageName = $_.ModuleName
-                            Version = $_.ModuleVersion
-                            Source = $Source.Name
-                            AppliesTo = $null
-                        }
-                        [void]$Dependencies.Add((New-Dependency @Dependency))
-                    }
-                    #>
-                    # GitLab / PSGallery / chocolatey / nuget
-                    @($ModuleManifest.PrivateData.RequiredPackages) -ne $null | % {
-                        $Dependency = $_.CanonicalId.Split(':/#') # 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
-                        [void]$Dependencies.Add((New-Dependency @Dependency))
-                    }
-                    $Swid = @{
-                        Name = $Project.name
-                        Version = $TagName #[System.Version]$Tag
-                        VersionScheme = 'MultiPartNumeric'
-                        Source = $Source.Name
-                        Summary = $Project.description
-                        FullPath = $Source.Location + "/projects/$ProjectId/repository/archive?sha=$TagName" # zip download link
-                        FromTrustedSource = $true
-                        Filename = ''
-                        SearchKey = ''
-                        Details = @{}
-                        Entities = @()
-                        Links = @()
-                        Dependencies = $Dependencies # array of json
-                        #TagId <string>
-                    }
-                    $Swid.FastPackageReference = $Swid | ConvertTo-Json
-                    New-SoftwareIdentity @Swid
-                    if (-not $Options.AllVersions) { break }
-                }
-            }
-        }
+					# retrieve dependencies
+					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=${CommitId}&per_page=-1")
+					
+					$ManifestFileName = ($RepositoryTree | ? Name -like *.psd1).name
+					$ManifestFilePath = [System.IO.Path]::GetTempFileName()
+					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
+					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
+					rm $ManifestFilePath
 
+					if ($RepositoryTree | ? Name -eq .gitmodules) {
+						$SubmodulesFilePath = [System.IO.Path]::GetTempFileName()
+						Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=.gitmodules") -OutFile $SubmodulesFilePath
+						$Submodules = Get-GitSubmodules $SubmodulesFilePath
+						rm $SubmodulesFilePath
+					}
+
+					# GitLab / PSGallery / chocolatey / nuget
+					$Dependencies = New-Object System.Collections.ArrayList
+					@($ModuleManifest.PrivateData.RequiredPackages) -ne $null | % {
+						$Dependency = $_.CanonicalId.Split(':/#') # 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
+						[void]$Dependencies.Add((New-Dependency @Dependency))
+					}
+					$Swid = @{
+						Name = $Project.name
+						Version = $TagName #[System.Version]$Tag
+						VersionScheme = 'MultiPartNumeric'
+						Source = $Source.Name
+						Summary = $Project.description
+						FullPath = $Source.Location + "/projects/$ProjectId/repository/archive.zip?sha=$TagName" # zip download link
+						FromTrustedSource = $true
+						Filename = ''
+						SearchKey = ''
+						Details = @{
+							CommitId = $CommitId
+							Submodules = @($Submodules)
+						}
+						Entities = @()
+						Links = @()
+						Dependencies = $Dependencies # array of json
+						#TagId <string>
+					}
+					$Swid.FastPackageReference = $Swid | ConvertTo-Json -Depth 3
+					New-SoftwareIdentity @Swid
+					if (-not $Options.AllVersions) { break }
+				}
+			}
+		}
     }
 }
 
@@ -201,38 +201,39 @@ function Download-Package {
         [ValidateNotNullOrEmpty()]
         [string] $Location
     )
-    $Options = $request.Options
-    $Sources = Get-PackageSources $request
 
-    if (-not (Test-Path $Location)) { mkdir $Location }
-    Push-Location $Location
+	$Options = $request.Options
+	$Sources = Get-PackageSources $request
+	$PackageInfo = $FastPackageReference | ConvertFrom-Json
+	$Source = $Sources | ? Name -eq $PackageInfo.Source
+	$h = @{Headers = $Source.Headers}
 
-    $PackageInfo = $FastPackageReference | ConvertFrom-Json
-    $Source = $Sources | ? Name -eq $PackageInfo.Source
-    $OutFile = Join-Path $Location 'package.tar.gz'
-    Invoke-WebRequest -Uri $PackageInfo.FullPath -Headers $Source.Headers -OutFile $OutFile
-    
-     if ($IsWindows) {
-        $cmd =
-            '/S /C "',
-            "$PSSCriptRoot\7z.exe",
-            ' e ',
-            $OutFile,
-            ' -so | 7z x -si -ttar"' -join '"'
-        & cmd $cmd
-        Remove-Item pax_global_header
-     } else {
-         & tar xzf $OutFile
-     }
+	if (-not (Test-Path $Location)) { mkdir $Location }
+	Push-Location $Location
     New-Item -Type Directory -Path $PackageInfo.Name -ea SilentlyContinue
-    Join-Path $Location "$($PackageInfo.Name)-$($PackageInfo.Version)*" -Resolve |
-    Rename-Item -NewName $PackageInfo.Version -PassThru | Move-Item -Destination $PackageInfo.Name
-    Remove-Item $OutFile 
-    Pop-Location
-    
-    $Swid = $PackageInfo | ConvertTo-Hashtable
-    $Swid.FastPackageReference = $FastPackageReference
-    New-SoftwareIdentity @Swid
+	Invoke-WebRequest @h -Uri $PackageInfo.FullPath -OutFile package.zip
+	Expand-Archive -Path package.zip -DestinationPath .
+	$UncompressedPath = "$($PackageInfo.Name)-$($PackageInfo.Version)-$($PackageInfo.Details.CommitId)"
+	# Submodule handling (from the same source)
+	$PackageInfo.Details.Submodules -ne $null | % {
+		$RepositoryTreeUrl = $PackageInfo.FullPath -replace [regex]::Escape("/archive.zip?sha=$($PackageInfo.Version)"),"/tree?ref=$($PackageInfo.Details.CommitId)"
+		$RepositoryTree = Invoke-RestMethod @h -Uri $RepositoryTreeUrl
+		$SubmoduleCommitId = ($RepositoryTree | ? name -eq $_.path).id
+		Invoke-WebRequest @h -Uri ($_.url + "/repository/archive.zip?ref=$SubmoduleCommitId") -OutFile submodule.zip
+		Expand-Archive -Path submodule.zip -DestinationPath .
+		$UncompressedSubmodulePath = (Resolve-Path "*$SubmoduleCommitId").Path
+		Move-Item -Path ($UncompressedSubmodulePath + '\*') -Destination (Join-Path $UncompressedPath $_.path)
+		rm submodule.zip
+		rm $UncompressedSubmodulePath
+	}
+	Rename-Item -Path $UncompressedPath -NewName $PackageInfo.Version -PassThru |
+	Move-Item -Destination $PackageInfo.Name
+	rm package.zip
+	Pop-Location
+	
+	$Swid = $PackageInfo | ConvertTo-Hashtable
+	$Swid.FastPackageReference = $FastPackageReference
+	New-SoftwareIdentity @Swid
 }
 
 function Install-Package {
@@ -293,19 +294,20 @@ function Get-InstalledPackage {
         $MaximumVersion = "$([int]::MaxValue).0"
     }
 
-    [array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
-        Get-Content $InstalledPackagesPath | ConvertFrom-Json
-    } else { @() }
-    $InstalledPackages | ? Name -match $Name | Sort-Object Version -Descending | ? {
-        [System.Version]($_.Version) -ge $MinimumVersion -and
-        [System.Version]($_.Version) -le $MaximumVersion -and
-        (-not $RequiredVersion -or $_.Version -eq $RequiredVersion)
-    } | ? Location -match ([regex]::Escape($request.Options.Location)) |
-    Select * -ExcludeProperty Location | % {
-        $Swid = ConvertTo-Hashtable $_
-        $Swid.FastPackageReference = $_ | ConvertTo-Json
-        New-SoftwareIdentity @Swid
-    }
+
+	[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
+		Get-Content $InstalledPackagesPath | ConvertFrom-Json
+	} else { @() }
+	$InstalledPackages | ? Name -match $Name | Sort-Object Version -Descending | ? {
+		[System.Version]($_.Version) -ge $MinimumVersion -and
+		[System.Version]($_.Version) -le $MaximumVersion -and
+		(-not $RequiredVersion -or $_.Version -eq $RequiredVersion)
+	} | ? Location -match ([regex]::Escape($request.Options.Location)) |
+	Select * -ExcludeProperty Location | % {
+		$Swid = ConvertTo-Hashtable $_
+		$Swid.FastPackageReference = $_ | ConvertTo-Json -Depth 3
+		New-SoftwareIdentity @Swid
+	}
 }
 
 function Get-PackageDependencies {
