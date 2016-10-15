@@ -8,7 +8,7 @@ $IsWindows = $Runtime::IsOSPlatform($OSPlatform::Windows)
 $PSUserHome = if($IsWindows) {
   "$env:USERPROFILE\Documents\WindowsPowerShell"
 } else {
-  "$env:HOME\l.local\config\powershell"
+  "$env:HOME\.local\share\powershell"
 }
 
 function Initialize-Provider {
