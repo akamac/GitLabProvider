@@ -144,7 +144,7 @@ function Find-Package {
 			foreach ($Project in $Projects) {
 				$ProjectId = $Project.id
 				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=100")
-				$Tags | Sort name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+				$Tags | Sort-Object name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
 							[System.Version]($_.name) -le $MaximumVersion -and
 							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
 				} -pv Tag | % {
