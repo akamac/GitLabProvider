@@ -112,7 +112,7 @@ function Resolve-PackageSources {
 
 function Find-Package { 
     param(
-        [Parameter(Mandatory)]
+	#[Parameter(Mandatory)
         [string[]] $Name,
         [string] $RequiredVersion,
         [string] $MinimumVersion,
@@ -122,28 +122,37 @@ function Find-Package {
         $MinimumVersion = '0.0'
     }
     if (-not $MaximumVersion) {
-        $MaximumVersion = "$([int]::MaxValue).0"
-    }
-    $Options = $request.Options
-    $Sources = Get-PackageSources $request
-    foreach ($Source in $Sources) {
-        if ($request.IsCanceled) { return }
-        $h = @{Headers = $Source.Headers}
-        $Name | % {
-            $Projects = Invoke-RestMethod @h ($Source.Location + "/projects/search/${_}?per_page=-1")
-            foreach ($Project in $Projects) {
-                $ProjectId = $Project.id
-                $Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=-1")
-
-                $Tags | Sort-Object name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
-                            [System.Version]($_.name) -le $MaximumVersion -and
-                            (-not $RequiredVersion -or $_.name -eq $RequiredVersion)
-                } -pv Tag | % {
-                    $TagName = $Tag.name
-                    $CommitId = $Tag.commit.id
+		$MaximumVersion = "$([int]::MaxValue).0"
+	}
+	$Options = $request.Options
+	$Sources = Get-PackageSources $request
+	foreach ($Source in $Sources) {
+		if ($request.IsCanceled) { return }
+		$h = @{Headers = $Source.Headers}
+        if (-not $Name) { $Name = '*' }
+		$Name | % {
+            if ($_ -eq '*') {
+                $page = 1
+                while ($Response = Invoke-RestMethod @h ($Source.Location + "/projects?per_page=100&page=$page")) {
+                    [array]$Projects += $Response
+                    $page++
+                }
+            } else {
+			    $Projects = Invoke-RestMethod @h ($Source.Location + "/projects/search/${_}?per_page=100")
+            }
+            
+			foreach ($Project in $Projects) {
+				$ProjectId = $Project.id
+				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=100")
+				$Tags | Sort name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+							[System.Version]($_.name) -le $MaximumVersion -and
+							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
+				} -pv Tag | % {
+					$TagName = $Tag.name
+					$CommitId = $Tag.commit.id
 
 					# retrieve dependencies
-					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=${CommitId}&per_page=-1")
+					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=${CommitId}&per_page=100")
 					
 					$ManifestFileName = ($RepositoryTree | ? Name -like *.psd1).name
 					$ManifestFilePath = [System.IO.Path]::GetTempFileName()
@@ -185,7 +194,7 @@ function Find-Package {
 					}
 					$Swid.FastPackageReference = $Swid | ConvertTo-Json -Depth 3
 					New-SoftwareIdentity @Swid
-					if (-not $Options.AllVersions) { break }
+					if (-not $Options.AllVersions) { continue }
 				}
 			}
 		}
