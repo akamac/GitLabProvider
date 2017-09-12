@@ -33,23 +33,29 @@ function Set-PackageSourcePrivateToken {
 	param(
 		[Parameter(Mandatory)]
 		[string[]] $Source,
-		[Parameter(Mandatory)]
 		[pscredential] $Credential
 	)
 	$Source | % {
 		$PackageSource = $script:RegisteredPackageSources | ? Name -eq $_
-		if (-not $PackageSource.Headers) {
-			$Auth = @{
-				login = $Credential.UserName
-				password = $Credential.GetNetworkCredential().Password
+		if ($Credential) {
+			if ($Credential.UserName -ne 'AuthToken') {
+				$Auth = @{
+					login = $Credential.UserName
+					password = $Credential.GetNetworkCredential().Password
+				}
+				$Location = $PackageSource.Location.TrimEnd('/')
+				$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
+			} else {
+				$PrivateToken = $Credential.GetNetworkCredential().Password
 			}
-			$Location = $PackageSource.Location.TrimEnd('/')
-			$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
 			$Headers = @{
 				'PRIVATE-TOKEN' = $PrivateToken
-				#'SUDO' = 'root'
 			}
-			$PackageSource | Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable
+			if (-not $PackageSource.Headers) {
+				$PackageSource | Add-Member -MemberType NoteProperty -Name Headers -Value $Headers -TypeName hashtable
+			} else {
+				$PackageSource.Headers.'PRIVATE-TOKEN' = $Headers.'PRIVATE-TOKEN'
+			}
 		}
 	}
 }
