@@ -39,12 +39,16 @@ function Set-PackageSourcePrivateToken {
 	$Source | % {
 		$PackageSource = $script:RegisteredPackageSources | ? Name -eq $_
 		if (-not $PackageSource.Headers) {
-			$Auth = @{
-				login = $Credential.UserName
-				password = $Credential.GetNetworkCredential().Password
+			if ($Credential.UserName -eq 'AuthToken') {
+				$PrivateToken = $Credential.GetNetworkCredential().Password
+			} else {
+				$Auth = @{
+					login = $Credential.UserName
+					password = $Credential.GetNetworkCredential().Password
+				}
+				$Location = $PackageSource.Location.TrimEnd('/')
+				$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
 			}
-			$Location = $PackageSource.Location.TrimEnd('/')
-			$PrivateToken = (Invoke-RestMethod -Uri ($Location + '/session') -Method Post -Body $Auth).'private_token'
 			$Headers = @{
 				'PRIVATE-TOKEN' = $PrivateToken
 				#'SUDO' = 'root'
