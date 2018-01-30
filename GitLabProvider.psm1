@@ -8,6 +8,7 @@ function Initialize-Provider {
 function Get-PackageProviderName {
 	# actual initialization
 	if (-not $Initialized) {
+		[System.Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 		$ConfigFolder = 'C:\ProgramData\GitLabProvider'
 		if (-not (Test-Path $ConfigFolder)) { mkdir $ConfigFolder }
 		$script:RegisteredPackageSourcesPath = "$ConfigFolder\PackageSources.json"
