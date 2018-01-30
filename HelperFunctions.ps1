@@ -55,36 +55,36 @@ function Set-PackageSourcePrivateToken {
 }
 
 function ConvertTo-Hashtable {
-    param(
-        [Parameter(Mandatory,ValueFromPipeline)]
-        [array] $Object,
-        [int] $Depth = 3
-    )
-    Process {
-        foreach ($obj in $Object) {
-            if (!$Depth) { return $obj }
-            $ht = [ordered]@{}
-            if ($obj -as [hashtable]) {
-                ($obj -as [hashtable]).GetEnumerator() | % {
-                    if ($_.Value -is [PSCustomObject]) {
-                        $ht[$_.Key] = ConvertTo-Hashtable ($_.Value) ($Depth - 1)
-                    } else {
-                        $ht[$_.Key] = $_.Value
-                    }
-                }
-                return $ht
-            } elseif ($obj.GetType().Name -eq 'PSCustomObject') {
-                $obj | Get-Member -MemberType Properties | % {
-                    $ht[$_.Name] = ConvertTo-Hashtable (,$obj.($_.Name)) ($Depth - 1)
-                }
-                return $ht
-            } elseif ($obj -as [array]) {
-                return ,$obj
-            } else {
-                return $obj
-            }
-        }
-    }
+	param(
+		[Parameter(Mandatory,ValueFromPipeline)]
+		[array] $Object,
+		[int] $Depth = 3
+	)
+	Process {
+		foreach ($obj in $Object) {
+			if (!$Depth) { return $obj }
+			$ht = [ordered]@{}
+			if ($obj -as [hashtable]) {
+				($obj -as [hashtable]).GetEnumerator() | % {
+					if ($_.Value -is [PSCustomObject]) {
+						$ht[$_.Key] = ConvertTo-Hashtable ($_.Value) ($Depth - 1)
+					} else {
+						$ht[$_.Key] = $_.Value
+					}
+				}
+				return $ht
+			} elseif ($obj.GetType().Name -eq 'PSCustomObject') {
+				$obj | Get-Member -MemberType Properties | % {
+					$ht[$_.Name] = ConvertTo-Hashtable (,$obj.($_.Name)) ($Depth - 1)
+				}
+				return $ht
+			} elseif ($obj -as [array]) {
+				return ,$obj
+			} else {
+				return $obj
+			}
+		}
+	}
 }
 
 function Get-GitSubmodules {
