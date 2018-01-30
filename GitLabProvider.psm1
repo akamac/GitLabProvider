@@ -1,4 +1,6 @@
-﻿. $PSScriptRoot\HelperFunctions.ps1
+. $PSScriptRoot\HelperFunctions.ps1
+
+$Platform = [System.Environment]::OSVersion.Platform # Win32NT / MacOSX / Unix
 
 function Initialize-Provider {
     Write-Verbose "Initializing provider $ProviderName"
@@ -9,8 +11,12 @@ function Get-PackageProviderName {
 	# actual initialization
 	if (-not $Initialized) {
 		[System.Net.ServicePointManager]::SecurityProtocol = 'Tls12'
-		$ConfigFolder = 'C:\ProgramData\GitLabProvider'
-		if (-not (Test-Path $ConfigFolder)) { mkdir $ConfigFolder }
+		$ConfigFolder = if ($Platform -eq 'Win32NT') {
+			'C:\ProgramData\GitLabProvider'
+		} else {
+			"$PSHome\GitLabProvider"
+		}
+		if (-not (Test-Path $ConfigFolder)) { New-Item -Type Directory -Path $ConfigFolder }
 		$script:RegisteredPackageSourcesPath = "$ConfigFolder\PackageSources.json"
 		[array]$script:RegisteredPackageSources = if (Test-Path $RegisteredPackageSourcesPath) {
 			Get-Content $RegisteredPackageSourcesPath | ConvertFrom-Json | % {
@@ -19,7 +25,6 @@ function Get-PackageProviderName {
 		} else { @() }
 	
 		$script:InstalledPackagesPath = "$ConfigFolder\InstalledPackages.json"
-		
 		$script:Initialized = $true
 	}
 
@@ -82,7 +87,9 @@ function Remove-PackageSource {
 
 function Resolve-PackageSources {
     $SourceName = $request.PackageSources
-    if (-not $SourceName) { $SourceName = '*' }
+	if (-not $SourceName) {
+		return $script:RegisteredPackageSources
+	}
 	
 	$SourceName | % {
         if ($request.IsCanceled) { return }
@@ -96,7 +103,7 @@ function Resolve-PackageSources {
 
 function Find-Package { 
     param(
-		#[Parameter(Mandatory)]
+	    #[Parameter(Mandatory)
         [string[]] $Name,
         [string] $RequiredVersion,
         [string] $MinimumVersion,
@@ -128,7 +135,7 @@ function Find-Package {
 			foreach ($Project in $Projects) {
 				$ProjectId = $Project.id
 				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=100")
-				$Tags | Sort name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
+				$Tags | Sort-Object name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
 							[System.Version]($_.name) -le $MaximumVersion -and
 							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
 				} -pv Tag | % {
@@ -182,7 +189,6 @@ function Find-Package {
 				}
 			}
 		}
-
 	}
 }
 
@@ -195,15 +201,16 @@ function Download-Package {
         [ValidateNotNullOrEmpty()]
         [string] $Location
     )
+
 	$Options = $request.Options
 	$Sources = Get-PackageSources $request
 	$PackageInfo = $FastPackageReference | ConvertFrom-Json
 	$Source = $Sources | ? Name -eq $PackageInfo.Source
 	$h = @{Headers = $Source.Headers}
 
-	if (-not (Test-Path $Location)) { mkdir $Location }
+	if (-not (Test-Path $Location)) { New-Item -Type Directory -Path $Location }
 	Push-Location $Location
-	mkdir $PackageInfo.Name -ea SilentlyContinue
+	New-Item -Type Directory -Path $PackageInfo.Name -ea SilentlyContinue
 	Invoke-WebRequest @h -Uri $PackageInfo.FullPath -OutFile package.zip
 	Expand-Archive -Path package.zip -DestinationPath .
 	$UncompressedPath = "$($PackageInfo.Name)-$($PackageInfo.Version)-$($PackageInfo.Details.CommitId)"
@@ -237,10 +244,19 @@ function Install-Package {
 	$Location = if ($request.Options.Location) {
 		$request.Options.Location
 	} elseif ($request.Options.User) {
-		"$env:USERPROFILE\Documents\WindowsPowerShell\Modules\"
+		if ($Platform -eq 'Win32NT') {
+			"$env:USERPROFILE\Documents\WindowsPowerShell"
+		} else {
+			"$env:HOME/.local/share/powershell"
+		}
 	} else {
-		'C:\Program Files\WindowsPowerShell\Modules'
+		if ($Platform -eq 'Win32NT') {
+			'C:\Program Files\WindowsPowerShell\Modules'
+		} else {
+			'/usr/local/share/powershell/Modules'
+		}
 	}
+	if (-not (Test-Path $Location)) { New-Item -Type Directory -Path $Location }
 	Download-Package @PSBoundParameters -Location $Location
 	$Swid = $FastPackageReference | ConvertFrom-Json
 	$Param = @{
@@ -287,10 +303,11 @@ function Get-InstalledPackage {
 		$MaximumVersion = "$([int]::MaxValue).0"
 	}
 
+
 	[array]$script:InstalledPackages = if (Test-Path $InstalledPackagesPath) {
 		Get-Content $InstalledPackagesPath | ConvertFrom-Json
 	} else { @() }
-	$InstalledPackages | ? Name -match $Name | Sort Version -Descending | ? {
+	$InstalledPackages | ? Name -match $Name | Sort-Object Version -Descending | ? {
 		[System.Version]($_.Version) -ge $MinimumVersion -and
 		[System.Version]($_.Version) -le $MaximumVersion -and
 		(-not $RequiredVersion -or $_.Version -eq $RequiredVersion)

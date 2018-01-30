@@ -1,6 +1,6 @@
 @{
 	RootModule = 'GitLabProvider.psm1'
-	ModuleVersion = '1.3.5'
+	ModuleVersion = '1.3.6'
 	GUID = '603623a2-2dc6-47d2-bb7f-a6096cb12b4a'
 	Author = 'Alexey Miasoedov'
 	CompanyName = 'Intermedia'
