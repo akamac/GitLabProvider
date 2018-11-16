@@ -5,7 +5,7 @@ Sample usage:
 ```
 Import-PackageProvider GitLab
 # add GitLab Source (once)
-Register-PackageSource -ProviderName GitLab -Name <Company> -Location 'https://gitlab.domain.local/api/v3' -Trusted  
+Register-PackageSource -ProviderName GitLab -Name <Company> -Location 'https://gitlab.domain.local/api/v4' -Trusted  
 # search for package  
 $Package = Find-Package -ProviderName GitLab -Source <Company> -Name <PackageName> -Credential $Credential  
 # save package to disk  
