@@ -1,5 +1,5 @@
 # PowerShell PackageManagement provider for GitLab
-Implements [PackageProvider interface](https://github.com/OneGet/oneget/wiki/PackageProvider-Interface) (aka OneGet) for [GitLab](http://doc.gitlab.com/ee/api/). It allows you to install PowerShell modules right from a GitLab server (tested on GitLab EE 8.12+).
+Implements [PackageProvider interface](https://github.com/OneGet/oneget/wiki/PackageProvider-Interface) (aka OneGet) for [GitLab](http://doc.gitlab.com/ee/api/). It allows you to install PowerShell modules right from a GitLab server **(api v4 only)**.
 
 Sample usage:  
 ```

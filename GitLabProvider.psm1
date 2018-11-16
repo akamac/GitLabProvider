@@ -123,18 +123,14 @@ function Find-Package {
 		if (-not $Name) { $Name = '*' }
 		$Name | % {
 			if ($_ -eq '*') {
-				$page = 1
-				while ($Response = Invoke-RestMethod @h ($Source.Location + "/projects?per_page=100&page=$page")) {
-					[array]$Projects += $Response
-					$page++
-				}
+				$Projects = Invoke-RestMethod @h ($Source.Location + '/projects')
 			} else {
-				$Projects = Invoke-RestMethod @h ($Source.Location + "/projects/search/${_}?per_page=100")
+				$Projects = Invoke-RestMethod @h ($Source.Location + "/projects?search=$_")
 			}
 			
 			foreach ($Project in $Projects) {
 				$ProjectId = $Project.id
-				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags?per_page=100")
+				$Tags = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tags")
 				$Tags | Sort-Object name -Descending | ? { [System.Version]($_.name) -ge $MinimumVersion -and
 							[System.Version]($_.name) -le $MaximumVersion -and
 							(-not $RequiredVersion -or $_.name -eq $RequiredVersion)
@@ -143,17 +139,18 @@ function Find-Package {
 					$CommitId = $Tag.commit.id
 
 					# retrieve dependencies
-					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=${CommitId}&per_page=100")
+					$RepositoryTree = Invoke-RestMethod @h ($Source.Location + "/projects/$ProjectId/repository/tree?ref_name=$CommitId")
 					
-					$ManifestFileName = ($RepositoryTree | ? Name -like *.psd1).name
+					$ManifestFileBlobId = ($RepositoryTree | ? Name -like *.psd1).id
 					$ManifestFilePath = [System.IO.Path]::GetTempFileName()
-					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=$ManifestFileName") -OutFile $ManifestFilePath
+					Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/$ManifestFileBlobId/raw") -OutFile $ManifestFilePath
 					$ModuleManifest = Invoke-Expression (Get-Content $ManifestFilePath -Raw)
 					rm $ManifestFilePath
 
-					if ($RepositoryTree | ? Name -eq .gitmodules) {
+					$SubmodulesFileBlobId = ($RepositoryTree | ? Name -eq .gitmodules).id
+					if ($SubmodulesFileBlobId) {
 						$SubmodulesFilePath = [System.IO.Path]::GetTempFileName()
-						Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/${CommitId}?filepath=.gitmodules") -OutFile $SubmodulesFilePath
+						Invoke-WebRequest @h ($Source.Location + "/projects/$ProjectId/repository/blobs/$SubmodulesFileBlobId/raw") -OutFile $SubmodulesFilePath
 						$Submodules = Get-GitSubmodules $SubmodulesFilePath
 						rm $SubmodulesFilePath
 					}
@@ -281,7 +278,7 @@ function Uninstall-Package {
 	#[array]$InstalledPackages = Get-Content $InstalledPackagesPath | ConvertFrom-Json
 	$Package = $script:InstalledPackages | ? { $_.Name -eq $Swid.Name -and $_.Version -eq $Swid.Version }
 	$Location = Join-Path $Package.Location $Swid.Name
-	Remove-Item "$Location\$($Swid.Version)" -Recurse
+	Remove-Item "$Location\$($Swid.Version)" -Recurse -Force
 	if (-not (Test-Path "$Location\*")) {
 		Remove-Item $Location
 	}
