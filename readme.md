@@ -23,24 +23,24 @@ Dependencies CanonicalId should be specified in module manifest PrivateData.Requ
 See excerpt from .psd1 file:
 ```
 @{
-	PrivateData = @{
-		RequiredPackages = @(
-			@{CanonicalId = 'gitlab:CredentialManagement/1.2.1#CompanySource'},
-			@{CanonicalId = 'powershellget:PSScriptAnalyzer/1.5.0#PSGallery'},
-			@{
-				CanonicalId = 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
-				Destination = 'C:\ProgramData\NuGet\Packages'
-				RequiredAssemblies = @('\lib\40\Microsoft.Exchange.WebServices.dll')
-				EnvPath = $false # Machine
-			},
-			@{
-				CanonicalId = 'chocolatey:OpenSSL.Light/1.1.0.20160926#'
-				# only default install path is supported for chocolatey packages
-				Destination = 'C:\Program Files\OpenSSL\bin'
-				EnvPath = $true # Machine
-			}
-		)
-	}
+    PrivateData = @{
+        RequiredPackages = @(
+            @{CanonicalId = 'gitlab:CredentialManagement/1.2.1#CompanySource'},
+            @{CanonicalId = 'powershellget:PSScriptAnalyzer/1.5.0#PSGallery'},
+            @{
+                CanonicalId = 'nuget:Microsoft.Exchange.WebServices/2.2#nuget.org'
+                Destination = 'C:\ProgramData\NuGet\Packages'
+                RequiredAssemblies = @('\lib\40\Microsoft.Exchange.WebServices.dll')
+                EnvPath = $false # Machine
+            },
+            @{
+                CanonicalId = 'chocolatey:OpenSSL.Light/1.1.0.20160926#'
+                # only default install path is supported for chocolatey packages
+                Destination = 'C:\Program Files\OpenSSL\bin'
+                EnvPath = $true # Machine
+            }
+        )
+    }
 }
 ```
-Other fields of RequiredPackages enable automatic package installation, assembly loading (nuget) and path update by separate project (to be published).
+Other fields of RequiredPackages enable automatic package installation, assembly loading (nuget) and path update by a [separate project](https://github.com/akamac/load-dependencies).
